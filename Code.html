@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Voxel Game</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { background:#0a0a0f; height:100vh; font-family:monospace; overflow:hidden; user-select:none; }
+    canvas { display:block; width:100vw; height:100vh; touch-action:none; position:fixed; z-index:0; }
+
+    /* UI oben links */
+    #ui { z-index:10; position:fixed; top:16px; left:16px; color:#00ffaa; font-size:13px; line-height:1.8; text-shadow:0 0 8px #00ffaa88; pointer-events:none; }
+    #ui span { color:#ffffff88; }
+
+    /* Fadenkreuz in der Mitte */
+    #cross { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:20px; height:20px; pointer-events:none; z-index:10; }
+    #cross::before, #cross::after { content:''; position:absolute; background:#ffffffaa; }
+    #cross::before { width:2px; height:100%; left:50%; transform:translateX(-50%); }
+    #cross::after  { width:100%; height:2px; top:50%; transform:translateY(-50%); }
+
+    /* Hotbar unten Mitte */
+    #hotbar { position:fixed; bottom:160px; left:50%; transform:translateX(-50%); display:flex; gap:4px; z-index:10; }
+    .slot { width:19px; height:19px; border-radius:4px; border:1px solid #ffffff33; cursor:pointer; transition:transform 0.1s, border-color 0.1s; }
+    .slot.active { border-color:#ffffff; transform:scale(1.15); }
+
+    /* Joystick links unten */
+    #joystick-base {
+      position:fixed; bottom:30px; left:30px; z-index:10;
+      width:175px; height:175px; border-radius:50%;
+      background:#ffffff10; border:2px solid #ffffff33;
+      touch-action:none;
+    }
+    #joystick-knob {
+      position:absolute; width:70px; height:70px;
+      border-radius:50%; background:#ffffff55;
+      border:2px solid #ffffffaa;
+      top:50%; left:50%;
+      transform:translate(-50%,-50%);
+      pointer-events:none;
+      transition: background 0.1s;
+    }
+
+    /* Höhen-Buttons und Aktions-Rad rechts unten */
+    #action-wheel {
+      position: fixed; bottom: 30px; right: 20px;
+      width: 175px; height: 175px;
+      z-index: 10;
+    }
+    /* SVG füllt den ganzen Kreis */
+    #action-wheel svg {
+      width: 100%; height: 100%;
+      overflow: visible;
+    }
+    /* Kuchenstücke */
+    .pie-slice {
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: opacity 0.1s;
+    }
+    .pie-slice:active { opacity: 0.6; }
+
+    /* Ring-Buttons um den Kreis */
+    .ring-btn {
+      position: absolute;
+      width: 39px; height: 39px;
+      border-radius: 50%;
+      background: #ffffff18;
+      border: 1px solid #ffffff44;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transform: translate(-50%, -50%);
+    }
+    .ring-btn:active { background: #ffffff44; }
+
+    /* Swipe-Zone für Blickrichtung – die ganze Mitte */
+    #look { position:fixed; top:0; left:0; width:100vw; height:100vh; z-index:5; touch-action:none; }
+
+    /* Flug/Lauf Modus Button oben rechts */
+    #btn-mode {
+      position:fixed; top:16px; right:16px; z-index:10;
+      width:34px; height:34px; background:#ffffff18;
+      border:1px solid #ffffff33; border-radius:8px;
+      display:flex; align-items:center; justify-content:center;
+      font-size:16px; cursor:pointer;
+      -webkit-tap-highlight-color:transparent;
+    }
+    #btn-mode.fly  { border-color:#00aaff88; background:#00aaff18; }
+    #btn-mode.walk { border-color:#ffaa0088; background:#ffaa0018; }
+
+    /* Desktop-Modus: UI ausblenden bis auf Hotbar */
+    body.desktop-mode #joystick-base,
+    body.desktop-mode #action-wheel,
+    body.desktop-mode #btn-mode,
+    body.desktop-mode #ui { display: none !important; }
+
+    /* Cursor verstecken im Desktop-Modus */
+    body.desktop-mode { cursor: none; }
+
+    /* Klick-Hinweis wenn kein Pointer Lock */
+    #click-hint {
+      position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+      color:#ffffffaa; font-size:14px; font-family:monospace;
+      pointer-events:none; z-index:20; text-align:center;
+      background:#00000055; padding:10px 18px; border-radius:8px;
+      display:none;
+    }
+    body.desktop-mode #click-hint { display:block; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="click-hint">Klicke um die Maus zu sperren</div>
+<div id="cross"></div>
+
+<div id="ui">
+  <span>ENGINE:</span> WebGL 1.0<br>
+  <span>VOXELS:</span> <span id="vcount">512</span><br>
+  <span>FPS:</span> <span id="fps">--</span>
+</div>
+
+<!-- Blick-Swipe Zone -->
+<div id="btn-mode" class="walk" onclick="toggleMode()">🚶</div>
+<div id="look"></div>
+
+<!-- Joystick links -->
+<div id="joystick-base">
+  <div id="joystick-knob"></div>
+</div>
+
+<!-- Aktionsrad + Ring-Buttons rechts unten -->
+<div id="action-wheel">
+  <svg viewBox="-50 -50 100 100" id="action-svg">
+    <!-- Hintergrundkreis -->
+    <circle cx="0" cy="0" r="48" fill="#ffffff08" stroke="#ffffff22" stroke-width="1"/>
+
+    <!--
+      Trennlinien bei 60°, 180°, 300°
+      Punkte auf r=48:
+        60°:  (24,   41.6)
+        180°: (-48,  0)
+        300°: (24,  -41.6)
+
+      Slope:   300° bis 60°  (Mitte bei 0°   = rechts)
+      Bauen:   60°  bis 180° (Mitte bei 120° = links-unten)
+      Abbauen: 180° bis 300° (Mitte bei 240° = links-oben)
+    -->
+
+    <!-- Slope: 300° bis 60° (durch 0°, large-arc=0) -->
+    <path id="btn-slope"
+      d="M0,0 L24,-41.6 A48,48,0,0,1,24,41.6 Z"
+      fill="#ffffff12" stroke="#ffffff25" stroke-width="1"
+      class="pie-slice"/>
+
+    <!-- Bauen: 60° bis 180° -->
+    <path id="btn-place"
+      d="M0,0 L24,41.6 A48,48,0,0,1,-48,0 Z"
+      fill="#ffffff12" stroke="#ffffff25" stroke-width="1"
+      class="pie-slice"/>
+
+    <!-- Abbauen: 180° bis 300° -->
+    <path id="btn-remove"
+      d="M0,0 L-48,0 A48,48,0,0,1,24,-41.6 Z"
+      fill="#ffffff12" stroke="#ffffff25" stroke-width="1"
+      class="pie-slice"/>
+
+    <!-- Icons: Mitte jedes Sektors bei r=28 -->
+    <!-- Slope Mitte 0°: (28, 0) -->
+    <text x="28" y="4" fill="#ffffffaa" font-size="9" text-anchor="middle" pointer-events="none">📐</text>
+    <!-- Bauen Mitte 120°: cos120=-0.5, sin120=0.866 → (-14, 24) -->
+    <text x="-14" y="28" fill="#ffffffaa" font-size="9" text-anchor="middle" pointer-events="none">🟩</text>
+    <!-- Abbauen Mitte 240°: cos240=-0.5, sin240=-0.866 → (-14, -24) -->
+    <text x="-14" y="-20" fill="#ffffffaa" font-size="9" text-anchor="middle" pointer-events="none">🗑</text>
+
+    <!-- Trennlinien -->
+    <line x1="0" y1="0" x2="24"  y2="41.6"  stroke="#ffffff30" stroke-width="0.8"/>
+    <line x1="0" y1="0" x2="-48" y2="0"     stroke="#ffffff30" stroke-width="0.8"/>
+    <line x1="0" y1="0" x2="24"  y2="-41.6" stroke="#ffffff30" stroke-width="0.8"/>
+
+    <!-- Mittelpunkt -->
+    <circle cx="0" cy="0" r="7" fill="#ffffff15" stroke="#ffffff33" stroke-width="1"/>
+  </svg>
+
+  <!-- Ring-Buttons: Radius 65px vom Zentrum -->
+  <!-- btn-u bei 270° (oben): links=50%, top=50%-65px -->
+  <div class="ring-btn" id="btn-u"
+    style="left:50%; top:calc(50% - 114px);">⬆</div>
+  <div class="ring-btn" id="btn-d"
+    style="left:calc(50% + 80px); top:calc(50% - 80px);">⬇</div>
+</div>
+
+<!-- Hotbar -->
+<div id="hotbar">
+  <div class="slot active" id="slot0" style="background:#3a8a3a;" onclick="selectSlot(0)"></div>
+  <div class="slot"        id="slot1" style="background:#7a4a1a;" onclick="selectSlot(1)"></div>
+  <div class="slot"        id="slot2" style="background:#707070;" onclick="selectSlot(2)"></div>
+</div>
+
+<script>
+// ── WebGL ─────────────────────────────────────
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl');
+if (!gl) alert('WebGL nicht unterstützt!');
+function resize(){ canvas.width=window.innerWidth; canvas.height=window.innerHeight; gl.viewport(0,0,canvas.width,canvas.height); }
+resize(); window.addEventListener('resize',resize);
+
+const vs=`attribute vec3 aPos;attribute vec3 aColor;uniform mat4 uMVP;varying vec3 vColor;void main(){vColor=aColor;gl_Position=uMVP*vec4(aPos,1.0);}`;
+const fs=`precision mediump float;varying vec3 vColor;void main(){gl_FragColor=vec4(vColor,1.0);}`;
+function mkShader(t,s){const sh=gl.createShader(t);gl.shaderSource(sh,s);gl.compileShader(sh);return sh;}
+const prog=gl.createProgram();
+gl.attachShader(prog,mkShader(gl.VERTEX_SHADER,vs));
+gl.attachShader(prog,mkShader(gl.FRAGMENT_SHADER,fs));
+gl.linkProgram(prog);gl.useProgram(prog);
+// Für große Welten: Uint32 Index-Buffer aktivieren
+gl.getExtension('OES_element_index_uint');
+
+// ── Farben ────────────────────────────────────
+const COLORS_BY_SLOT=[
+  [[.2,.9,.5],[.1,.5,.3],[.4,1,.7],[.05,.3,.15],[.15,.7,.4],[.1,.6,.35]],   // grün
+  [[.6,.35,.1],[.35,.2,.05],[.75,.45,.15],[.2,.12,.03],[.5,.28,.08],[.42,.24,.07]], // braun
+  [[.7,.7,.7],[.4,.4,.4],[.9,.9,.9],[.2,.2,.2],[.6,.6,.6],[.5,.5,.5]],      // grau
+];
+let selectedSlot=0;
+function selectSlot(i){selectedSlot=i;document.querySelectorAll('.slot').forEach((s,j)=>s.classList.toggle('active',j===i));}
+
+// ── Voxel-Welt ────────────────────────────────
+// 32×32 breit/lang, 2 Schichten tief
+// Oben (y=1): grün (slot 0), Unten (y=0): braun (slot 1)
+const VS=0.125, STEP=0.25;
+const GRIDX=32, GRIDY=2, GRIDZ=32;
+let voxels=[];
+for(let x=0;x<GRIDX;x++) for(let y=0;y<GRIDY;y++) for(let z=0;z<GRIDZ;z++)
+  voxels.push({x, y, z, active:true, slot: y===1 ? 0 : 1}); // y=1 oben=grün, y=0 unten=braun
+
+function updateCount(){document.getElementById('vcount').textContent=voxels.filter(v=>v.active).length;}
+function getVoxel(x,y,z){return voxels.find(v=>v.x===x&&v.y===y&&v.z===z)||null;}
+function voxelWorld(v){return{
+  cx:(v.x-(GRIDX-1)/2)*STEP,
+  cy:(v.y-(GRIDY-1)/2)*STEP,
+  cz:(v.z-(GRIDZ-1)/2)*STEP,
+};}
+// Für GRID-Referenzen im Ray Casting brauchen wir einen Dummy – nicht mehr nötig
+
+// ── Slope System ─────────────────────────────
+// Eine Slope in Grundform: Rückwand bei -Z, Boden bei -Y, schräg von -Z-oben nach +Z-unten
+// slopeDir = Index in SLOPE_ORIENTATIONS (0..23 = alle 24 Orientierungen)
+// Jede Orientierung ist eine 3x3 Rotationsmatrix die auf die Grundform angewandt wird
+
+// 24 Rotationsmatrizen (alle 90°-Schritte die eine Slope eindeutig orientieren)
+// Format: [xx,xy,xz, yx,yy,yz, zx,zy,zz]
+const SLOPE_ORIENTATIONS = [
+  // Boden-Slopes (Boden=-Y, schräg nach oben in eine Richtung)
+  [ 1, 0, 0,  0, 1, 0,  0, 0, 1], // 0: Rückwand -Z, hoch nach -Z
+  [-1, 0, 0,  0, 1, 0,  0, 0,-1], // 1: Rückwand +Z, hoch nach +Z
+  [ 0, 0, 1,  0, 1, 0, -1, 0, 0], // 2: Rückwand -X, hoch nach -X
+  [ 0, 0,-1,  0, 1, 0,  1, 0, 0], // 3: Rückwand +X, hoch nach +X
+  // Decken-Slopes (kopfüber, Decke=+Y)
+  [ 1, 0, 0,  0,-1, 0,  0, 0,-1], // 4: kopfüber, hoch nach -Z
+  [-1, 0, 0,  0,-1, 0,  0, 0, 1], // 5: kopfüber, hoch nach +Z
+  [ 0, 0, 1,  0,-1, 0,  1, 0, 0], // 6: kopfüber, hoch nach +X
+  [ 0, 0,-1,  0,-1, 0, -1, 0, 0], // 7: kopfüber, hoch nach -X
+  // Wand-Slopes an +Z (Rückwand=+Z)
+  [ 1, 0, 0,  0, 0,-1,  0, 1, 0], // 8: Wand +Z, hoch nach -Y
+  [-1, 0, 0,  0, 0, 1,  0, 1, 0], // 9: Wand +Z, hoch nach +Y
+  [ 0,-1, 0,  0, 0,-1, -1, 0, 0], //10: Wand +Z, hoch nach -X
+  [ 0, 1, 0,  0, 0,-1,  1, 0, 0], //11: Wand +Z, hoch nach +X
+  // Wand-Slopes an -Z
+  [ 1, 0, 0,  0, 0, 1,  0,-1, 0], //12: Wand -Z, hoch nach +Y
+  [-1, 0, 0,  0, 0,-1,  0,-1, 0], //13: Wand -Z, hoch nach -Y
+  [ 0, 1, 0,  0, 0, 1, -1, 0, 0], //14: Wand -Z, hoch nach -X
+  [ 0,-1, 0,  0, 0, 1,  1, 0, 0], //15: Wand -Z, hoch nach +X
+  // Wand-Slopes an +X
+  [ 0, 0,-1,  0, 1, 0,  1, 0, 0], //16: Wand +X, hoch nach -Z (dup check)
+  [ 0, 0, 1,  0, 1, 0, -1, 0, 0], //17: Wand +X, hoch nach +Z
+  [ 0, 0,-1,  1, 0, 0,  0,-1, 0], //18: Wand +X rot
+  [ 0, 0, 1, -1, 0, 0,  0,-1, 0], //19
+  // Wand-Slopes an -X
+  [ 0, 0, 1,  0, 1, 0,  1, 0, 0], //20
+  [ 0, 0,-1,  0, 1, 0, -1, 0, 0], //21
+  [ 0, 0, 1,  1, 0, 0,  0, 1, 0], //22
+  [ 0, 0,-1, -1, 0, 0,  0, 1, 0], //23
+];
+
+// Grundform der Slope (lokale Koordinaten, s=0.5 Einheit)
+// Rückwand bei z=-s (komplett), Boden bei y=-s (komplett)
+// Schräge von [-s,+s,-s] über [+s,+s,-s] zu [-s,-s,+s],[+s,-s,+s]
+// 5 Flächen: Boden(quad), Rückwand(quad), Schräge(quad), links(tri), rechts(tri)
+function rotatePt(p, m) {
+  return [
+    p[0]*m[0] + p[1]*m[3] + p[2]*m[6],
+    p[0]*m[1] + p[1]*m[4] + p[2]*m[7],
+    p[0]*m[2] + p[1]*m[5] + p[2]*m[8],
+  ];
+}
+
+function pushTri(verts,idxs,vo,p0,p1,p2,col){
+  verts.push(...p0,...col,...p1,...col,...p2,...col);
+  idxs.push(vo,vo+1,vo+2);
+  return vo+3;
+}
+function pushQuad(verts,idxs,vo,p0,p1,p2,p3,col){
+  verts.push(...p0,...col,...p1,...col,...p2,...col,...p3,...col);
+  idxs.push(vo,vo+1,vo+2,vo,vo+2,vo+3);
+  return vo+4;
+}
+
+function addSlopeGeometry(verts,idxs,vo,cx,cy,cz,s,cols,slopeDir){
+  const m = SLOPE_ORIENTATIONS[slopeDir % SLOPE_ORIENTATIONS.length];
+  const [cf,cb,ct,cbo,cr,cl] = cols;
+
+  // Grundform-Punkte (vor Rotation)
+  const BLN=[-s,-s,-s], BRN=[s,-s,-s], BLF=[-s,-s,s], BRF=[s,-s,s];
+  const TLN=[-s, s,-s], TRN=[s, s,-s]; // nur die hinteren oberen Ecken
+
+  // Rotieren und zur Weltposition verschieben
+  function rp(p){ const r=rotatePt(p,m); return [r[0]+cx,r[1]+cy,r[2]+cz]; }
+
+  const bln=rp(BLN),brn=rp(BRN),blf=rp(BLF),brf=rp(BRF);
+  const tln=rp(TLN),trn=rp(TRN);
+
+  // Boden (immer die 4 unteren Ecken)
+  vo=pushQuad(verts,idxs,vo,bln,brn,brf,blf,cbo);
+  // Rückwand (die 2 unteren + 2 oberen hinteren Ecken)
+  vo=pushQuad(verts,idxs,vo,brn,bln,tln,trn,cb);
+  // Schräge (obere Hinterkante → untere Vorderkante)
+  vo=pushQuad(verts,idxs,vo,tln,trn,brf,blf,ct);
+  // Linke Seite (Dreieck)
+  vo=pushTri(verts,idxs,vo,bln,blf,tln,cl);
+  // Rechte Seite (Dreieck)
+  vo=pushTri(verts,idxs,vo,brn,trn,brf,cr);
+
+  return vo;
+}
+
+// Welche Seiten deckt eine Slope komplett ab?
+// Grundform: Boden(-Y) und Rückwand(-Z) sind komplett
+// Nach Rotation entsprechen diese zwei anderen Weltachsen
+// NEIGHBORS Reihenfolge: [+z=0,-z=1,+y=2,-y=3,+x=4,-x=5]
+const DIR_VECS = [[0,0,1],[0,0,-1],[0,1,0],[0,-1,0],[1,0,0],[-1,0,0]];
+
+function getSlopeCovers(slopeDir){
+  const m = SLOPE_ORIENTATIONS[slopeDir % SLOPE_ORIENTATIONS.length];
+  // Boden der Grundform zeigt in -Y → nach Rotation
+  const floorNorm = rotatePt([0,-1,0], m);
+  // Rückwand der Grundform zeigt in -Z → nach Rotation
+  const backNorm  = rotatePt([0,0,-1], m);
+
+  return DIR_VECS.map(d => {
+    // Ist diese Richtung identisch mit einer der zwei abgedeckten Normals?
+    const matchFloor = Math.abs(d[0]-floorNorm[0])<0.1 && Math.abs(d[1]-floorNorm[1])<0.1 && Math.abs(d[2]-floorNorm[2])<0.1;
+    const matchBack  = Math.abs(d[0]-backNorm[0])<0.1  && Math.abs(d[1]-backNorm[1])<0.1  && Math.abs(d[2]-backNorm[2])<0.1;
+    return matchFloor || matchBack;
+  });
+}
+
+const NEIGHBORS=[[0,0,1],[0,0,-1],[0,1,0],[0,-1,0],[1,0,0],[-1,0,0]];
+const vbo=gl.createBuffer(), ibo=gl.createBuffer();
+let idxCount=0;
+
+function neighborCoversface(neighbor, faceIdx){
+  if(!neighbor||!neighbor.active) return false;
+  if(neighbor.type!=='slope') return true;
+  const covers = getSlopeCovers(neighbor.slopeDir??0);
+  const opposite=[1,0,3,2,5,4];
+  return covers[opposite[faceIdx]];
+}
+
+function buildBuffers(){
+  const lookup=new Map();
+  for(const v of voxels) if(v.active) lookup.set(`${v.x},${v.y},${v.z}`,v);
+  const verts=[],idxs=[];
+  let vo=0;
+  for(const v of voxels){
+    if(!v.active)continue;
+    const{cx,cy,cz}=voxelWorld(v);
+    const cols=COLORS_BY_SLOT[v.slot??2];
+    const s=VS;
+
+    if(v.type==='slope'){
+      vo=addSlopeGeometry(verts,idxs,vo,cx,cy,cz,s,cols,v.slopeDir??0);
+    } else {
+      NEIGHBORS.forEach(([dx,dy,dz],fi)=>{
+        const neighbor=lookup.get(`${v.x+dx},${v.y+dy},${v.z+dz}`);
+        if(neighborCoversface(neighbor,fi)) return;
+        const col=cols[fi];
+        let face;
+        if(fi===0)      face=[cx-s,cy-s,cz+s,cx+s,cy-s,cz+s,cx+s,cy+s,cz+s,cx-s,cy+s,cz+s];
+        else if(fi===1) face=[cx+s,cy-s,cz-s,cx-s,cy-s,cz-s,cx-s,cy+s,cz-s,cx+s,cy+s,cz-s];
+        else if(fi===2) face=[cx-s,cy+s,cz+s,cx+s,cy+s,cz+s,cx+s,cy+s,cz-s,cx-s,cy+s,cz-s];
+        else if(fi===3) face=[cx-s,cy-s,cz-s,cx+s,cy-s,cz-s,cx+s,cy-s,cz+s,cx-s,cy-s,cz+s];
+        else if(fi===4) face=[cx+s,cy-s,cz+s,cx+s,cy-s,cz-s,cx+s,cy+s,cz-s,cx+s,cy+s,cz+s];
+        else            face=[cx-s,cy-s,cz-s,cx-s,cy-s,cz+s,cx-s,cy+s,cz+s,cx-s,cy+s,cz-s];
+        for(let i=0;i<4;i++) verts.push(face[i*3],face[i*3+1],face[i*3+2],...col);
+        idxs.push(vo,vo+1,vo+2,vo,vo+2,vo+3); vo+=4;
+      });
+    }
+  }
+  idxCount=idxs.length;
+  gl.bindBuffer(gl.ARRAY_BUFFER,vbo);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(verts),gl.DYNAMIC_DRAW);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ibo);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint32Array(idxs),gl.DYNAMIC_DRAW);
+  const stride=6*4;
+  const ap=gl.getAttribLocation(prog,'aPos');
+  gl.enableVertexAttribArray(ap);gl.vertexAttribPointer(ap,3,gl.FLOAT,false,stride,0);
+  const ac=gl.getAttribLocation(prog,'aColor');
+  gl.enableVertexAttribArray(ac);gl.vertexAttribPointer(ac,3,gl.FLOAT,false,stride,12);
+}
+buildBuffers();
+const uMVP=gl.getUniformLocation(prog,'uMVP');
+
+// ── Mathe ─────────────────────────────────────
+function mat4(){return new Float32Array(16);}
+function identity(m){m.fill(0);m[0]=m[5]=m[10]=m[15]=1;return m;}
+function perspective(m,fov,asp,n,f){
+  const t=1/Math.tan(fov/2);m.fill(0);
+  m[0]=t/asp;m[5]=t;m[10]=(f+n)/(n-f);m[11]=-1;m[14]=2*f*n/(n-f);return m;
+}
+function mul(o,a,b){
+  for(let i=0;i<4;i++)for(let j=0;j<4;j++){o[j*4+i]=0;for(let k=0;k<4;k++)o[j*4+i]+=a[k*4+i]*b[j*4+k];}return o;
+}
+function rotYm(m,a){const c=Math.cos(a),s=Math.sin(a),r=identity(mat4());r[0]=c;r[8]=s;r[2]=-s;r[10]=c;return mul(mat4(),m,r);}
+function rotXm(m,a){const c=Math.cos(a),s=Math.sin(a),r=identity(mat4());r[5]=c;r[6]=s;r[9]=-s;r[10]=c;return mul(mat4(),m,r);}
+function transm(m,x,y,z){const t=identity(mat4());t[12]=x;t[13]=y;t[14]=z;return mul(mat4(),m,t);}
+
+function invMat4(m){
+  const inv=new Float32Array(16);
+  inv[0]=m[5]*m[10]*m[15]-m[5]*m[11]*m[14]-m[9]*m[6]*m[15]+m[9]*m[7]*m[14]+m[13]*m[6]*m[11]-m[13]*m[7]*m[10];
+  inv[4]=-m[4]*m[10]*m[15]+m[4]*m[11]*m[14]+m[8]*m[6]*m[15]-m[8]*m[7]*m[14]-m[12]*m[6]*m[11]+m[12]*m[7]*m[10];
+  inv[8]=m[4]*m[9]*m[15]-m[4]*m[11]*m[13]-m[8]*m[5]*m[15]+m[8]*m[7]*m[13]+m[12]*m[5]*m[11]-m[12]*m[7]*m[9];
+  inv[12]=-m[4]*m[9]*m[14]+m[4]*m[10]*m[13]+m[8]*m[5]*m[14]-m[8]*m[6]*m[13]-m[12]*m[5]*m[10]+m[12]*m[6]*m[9];
+  inv[1]=-m[1]*m[10]*m[15]+m[1]*m[11]*m[14]+m[9]*m[2]*m[15]-m[9]*m[3]*m[14]-m[13]*m[2]*m[11]+m[13]*m[3]*m[10];
+  inv[5]=m[0]*m[10]*m[15]-m[0]*m[11]*m[14]-m[8]*m[2]*m[15]+m[8]*m[3]*m[14]+m[12]*m[2]*m[11]-m[12]*m[3]*m[10];
+  inv[9]=-m[0]*m[9]*m[15]+m[0]*m[11]*m[13]+m[8]*m[1]*m[15]-m[8]*m[3]*m[13]-m[12]*m[1]*m[11]+m[12]*m[3]*m[9];
+  inv[13]=m[0]*m[9]*m[14]-m[0]*m[10]*m[13]-m[8]*m[1]*m[14]+m[8]*m[2]*m[13]+m[12]*m[1]*m[10]-m[12]*m[2]*m[9];
+  inv[2]=m[1]*m[6]*m[15]-m[1]*m[7]*m[14]-m[5]*m[2]*m[15]+m[5]*m[3]*m[14]+m[13]*m[2]*m[7]-m[13]*m[3]*m[6];
+  inv[6]=-m[0]*m[6]*m[15]+m[0]*m[7]*m[14]+m[4]*m[2]*m[15]-m[4]*m[3]*m[14]-m[12]*m[2]*m[7]+m[12]*m[3]*m[6];
+  inv[10]=m[0]*m[5]*m[15]-m[0]*m[7]*m[13]-m[4]*m[1]*m[15]+m[4]*m[3]*m[13]+m[12]*m[1]*m[7]-m[12]*m[3]*m[5];
+  inv[14]=-m[0]*m[5]*m[14]+m[0]*m[6]*m[13]+m[4]*m[1]*m[14]-m[4]*m[2]*m[13]-m[12]*m[1]*m[6]+m[12]*m[2]*m[5];
+  inv[3]=-m[1]*m[6]*m[11]+m[1]*m[7]*m[10]+m[5]*m[2]*m[11]-m[5]*m[3]*m[10]-m[9]*m[2]*m[7]+m[9]*m[3]*m[6];
+  inv[7]=m[0]*m[6]*m[11]-m[0]*m[7]*m[10]-m[4]*m[2]*m[11]+m[4]*m[3]*m[10]+m[8]*m[2]*m[7]-m[8]*m[3]*m[6];
+  inv[11]=-m[0]*m[5]*m[11]+m[0]*m[7]*m[9]+m[4]*m[1]*m[11]-m[4]*m[3]*m[9]-m[8]*m[1]*m[7]+m[8]*m[3]*m[5];
+  inv[15]=m[0]*m[5]*m[10]-m[0]*m[6]*m[9]-m[4]*m[1]*m[10]+m[4]*m[2]*m[9]+m[8]*m[1]*m[6]-m[8]*m[2]*m[5];
+  let det=m[0]*inv[0]+m[1]*inv[4]+m[2]*inv[8]+m[3]*inv[12];
+  if(Math.abs(det)<1e-10)return null;
+  det=1/det;for(let i=0;i<16;i++)inv[i]*=det;return inv;
+}
+function tv4(m,v){return[m[0]*v[0]+m[4]*v[1]+m[8]*v[2]+m[12]*v[3],m[1]*v[0]+m[5]*v[1]+m[9]*v[2]+m[13]*v[3],m[2]*v[0]+m[6]*v[1]+m[10]*v[2]+m[14]*v[3],m[3]*v[0]+m[7]*v[1]+m[11]*v[2]+m[15]*v[3]];}
+
+// ── Kamera (First Person) ─────────────────────
+// camYaw   = horizontale Blickrichtung (links/rechts)
+// camPitch = vertikale Blickrichtung (oben/unten)
+// camX/Y/Z = Position der Kamera in der Welt
+let camYaw=0, camPitch=0.3;
+// Mitte der Plattform: X=0, Z=0
+// Boden-Oberfläche ist bei Y=0.25, Augenhöhe = 0.25 + 1.75 = 2.0
+let camX=0, camY=2.0, camZ=0; // startet etwas vor dem Würfel
+
+// Blickrichtungsvektor berechnen (wohin schaut der Spieler?)
+function lookDir(){
+  const cy=Math.cos(camYaw), sy=Math.sin(camYaw);
+  const cp=Math.cos(camPitch), sp=Math.sin(camPitch);
+  return { dx: sy*cp, dy: -sp, dz: -cy*cp };
+}
+
+// View-Matrix: dreht die Welt so dass es aussieht als schaut der Spieler in lookDir
+function buildView(){
+  let m=identity(mat4());
+  m=rotXm(m, camPitch);
+  m=rotYm(m, camYaw);
+  m=transm(m, -camX, -camY, -camZ);
+  return m;
+}
+
+let lastMVP=identity(mat4());
+
+// ── Ray Casting ───────────────────────────────
+function getRay(px,py,mvp){
+  const inv=invMat4(mvp);if(!inv)return null;
+  const nx=(px/canvas.width)*2-1,ny=1-(py/canvas.height)*2;
+  const n=tv4(inv,[nx,ny,-1,1]),f=tv4(inv,[nx,ny,1,1]);
+  const ox=n[0]/n[3],oy=n[1]/n[3],oz=n[2]/n[3];
+  const fx=f[0]/f[3],fy=f[1]/f[3],fz=f[2]/f[3];
+  let dx=fx-ox,dy=fy-oy,dz=fz-oz;
+  const l=Math.sqrt(dx*dx+dy*dy+dz*dz);
+  return{ox,oy,oz,dx:dx/l,dy:dy/l,dz:dz/l};
+}
+
+// Strahl vom Fadenkreuz (Bildschirmmitte)
+function getCenterRay(){return getRay(canvas.width/2, canvas.height/2, lastMVP);}
+
+function rayBox(ray,cx,cy,cz,s){
+  let tmin=-Infinity,tmax=Infinity,hitNorm=[0,0,0];
+  const axes=[[ray.ox,ray.dx,cx-s,cx+s,[-1,0,0],[1,0,0]],[ray.oy,ray.dy,cy-s,cy+s,[0,-1,0],[0,1,0]],[ray.oz,ray.dz,cz-s,cz+s,[0,0,-1],[0,0,1]]];
+  for(const [ro,rd,mn,mx,nn,np] of axes){
+    if(Math.abs(rd)<1e-8){if(ro<mn||ro>mx)return null;continue;}
+    let t1=(mn-ro)/rd,t2=(mx-ro)/rd,n1=nn,n2=np;
+    if(t1>t2){[t1,t2]=[t2,t1];[n1,n2]=[n2,n1];}
+    if(t1>tmin){tmin=t1;hitNorm=n1;}
+    tmax=Math.min(tmax,t2);
+  }
+  if(tmax<tmin||tmax<0)return null;
+  return{t:tmin,norm:hitNorm};
+}
+
+function getBestHit(ray){
+  let bestT=Infinity,bestHit=null,bestV=null;
+  for(const v of voxels){
+    if(!v.active)continue;
+    const{cx,cy,cz}=voxelWorld(v);
+    const hit=rayBox(ray,cx,cy,cz,VS);
+    if(hit&&hit.t<bestT){bestT=hit.t;bestHit=hit;bestV=v;}
+  }
+  return{bestHit,bestV};
+}
+
+function doPlace(){
+  const ray=getCenterRay();if(!ray)return;
+  const{bestHit,bestV}=getBestHit(ray);
+  if(!bestV||!bestHit)return;
+  const nx=bestV.x+Math.round(bestHit.norm[0]);
+  const ny=bestV.y+Math.round(bestHit.norm[1]);
+  const nz=bestV.z+Math.round(bestHit.norm[2]);
+  const existing=getVoxel(nx,ny,nz);
+  if(existing){if(!existing.active){existing.active=true;existing.slot=selectedSlot;existing.type='block';buildBuffers();updateCount();}return;}
+  voxels.push({x:nx,y:ny,z:nz,active:true,slot:selectedSlot,type:'block'});
+  buildBuffers();updateCount();
+}
+
+function doPlaceSlope(){
+  const ray=getCenterRay(); if(!ray) return;
+  const{bestHit,bestV}=getBestHit(ray);
+  if(!bestV||!bestHit) return;
+
+  const nx=bestV.x+Math.round(bestHit.norm[0]);
+  const ny=bestV.y+Math.round(bestHit.norm[1]);
+  const nz=bestV.z+Math.round(bestHit.norm[2]);
+
+  const hitX=ray.ox+bestHit.t*ray.dx;
+  const hitY=ray.oy+bestHit.t*ray.dy;
+  const hitZ=ray.oz+bestHit.t*ray.dz;
+  const{cx,cy,cz}=voxelWorld(bestV);
+  const lx=(hitX-cx)/VS, ly=(hitY-cy)/VS, lz=(hitZ-cz)/VS;
+  const norm=bestHit.norm;
+
+  // Rückwand der Slope soll auf das getroffene Face zeigen
+  const backWall=[-norm[0],-norm[1],-norm[2]];
+
+  // Nächste Kante des Faces bestimmt die Boden-Normale
+  let ax1,ax2;
+  if(Math.abs(norm[0])>0.5){ ax1=[0,ly,0]; ax2=[0,0,lz]; }
+  else if(Math.abs(norm[1])>0.5){ ax1=[lx,0,0]; ax2=[0,0,lz]; }
+  else { ax1=[lx,0,0]; ax2=[0,ly,0]; }
+  const m1=Math.sqrt(ax1[0]**2+ax1[1]**2+ax1[2]**2);
+  const m2=Math.sqrt(ax2[0]**2+ax2[1]**2+ax2[2]**2);
+  let edgeDir;
+  if(m1>=m2&&m1>0.01) edgeDir=[ax1[0]/m1,ax1[1]/m1,ax1[2]/m1];
+  else if(m2>0.01)    edgeDir=[ax2[0]/m2,ax2[1]/m2,ax2[2]/m2];
+  else                edgeDir=[0,1,0];
+
+  // Finde beste der 24 Orientierungen
+  let bestDir=0, bestScore=-Infinity;
+  for(let i=0;i<SLOPE_ORIENTATIONS.length;i++){
+    const m=SLOPE_ORIENTATIONS[i];
+    const rotBack=rotatePt([0,0,-1],m);
+    const rotFloor=rotatePt([0,-1,0],m);
+    const sBack=rotBack[0]*backWall[0]+rotBack[1]*backWall[1]+rotBack[2]*backWall[2];
+    const sFloor=rotFloor[0]*edgeDir[0]+rotFloor[1]*edgeDir[1]+rotFloor[2]*edgeDir[2];
+    const score=sBack*2+sFloor;
+    if(score>bestScore){bestScore=score;bestDir=i;}
+  }
+
+  const existing=getVoxel(nx,ny,nz);
+  if(existing){
+    if(!existing.active){
+      existing.active=true;existing.slot=selectedSlot;
+      existing.type='slope';existing.slopeDir=bestDir;
+      buildBuffers();updateCount();
+    }
+    return;
+  }
+  voxels.push({x:nx,y:ny,z:nz,active:true,slot:selectedSlot,type:'slope',slopeDir:bestDir});
+  buildBuffers();updateCount();
+}
+
+function doRemove(){
+  const ray=getCenterRay();if(!ray)return;
+  const{bestHit,bestV}=getBestHit(ray);
+  if(!bestV)return;
+  bestV.active=false;buildBuffers();updateCount();
+}
+
+// ── Joystick ──────────────────────────────────
+// joyX/joyZ: Bewegungsvektor vom Joystick (-1 bis 1)
+// Der Wert skaliert mit dem Auslenkungs-Radius
+let joyX = 0, joyZ = 0;
+let joyTouchId = null;
+
+const joyBase  = document.getElementById('joystick-base');
+const joyKnob  = document.getElementById('joystick-knob');
+const JOY_R    = 50; // Radius der Base in px
+const KNOB_MAX = 52; // maximale Auslenkung des Knopfs in px
+
+function joyUpdate(cx, cy, bx, by) {
+  // cx/cy = Touch-Position, bx/by = Mitte der Base
+  let dx = cx - bx;
+  let dy = cy - by;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  const clamped = Math.min(dist, KNOB_MAX);
+  if (dist > 0) { dx = dx/dist * clamped; dy = dy/dist * clamped; }
+  // Knopf visuell bewegen
+  joyKnob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+  // Bewegungsvektor: 0 bis 1 je nach Auslenkung
+  const strength = clamped / KNOB_MAX;
+  joyX = dist > 3 ? (dx / clamped) * strength : 0;
+  joyZ = dist > 3 ? (dy / clamped) * strength : 0;
+}
+
+function joyReset() {
+  joyKnob.style.transform = 'translate(-50%, -50%)';
+  joyX = 0; joyZ = 0;
+  joyTouchId = null;
+}
+
+// Joystick Touch-Events (werden AUCH vom globalen Multi-Touch System erfasst
+// aber wir brauchen die Base-Mitte, daher eigene Handler)
+joyBase.addEventListener('touchstart', e => {
+  e.stopPropagation(); // nicht ans globale System weitergeben
+  e.preventDefault();
+  if (joyTouchId !== null) return;
+  const t = e.changedTouches[0];
+  joyTouchId = t.identifier;
+  const r = joyBase.getBoundingClientRect();
+  joyUpdate(t.clientX, t.clientY, r.left + r.width/2, r.top + r.height/2);
+}, { passive: false });
+
+joyBase.addEventListener('touchmove', e => {
+  e.stopPropagation();
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier !== joyTouchId) continue;
+    const r = joyBase.getBoundingClientRect();
+    joyUpdate(t.clientX, t.clientY, r.left + r.width/2, r.top + r.height/2);
+  }
+}, { passive: false });
+
+joyBase.addEventListener('touchend',    e => { e.stopPropagation(); joyReset(); }, { passive: false });
+joyBase.addEventListener('touchcancel', e => { e.stopPropagation(); joyReset(); }, { passive: false });
+
+// Maus-Support für Joystick auf Desktop
+let joyMouseDown = false;
+joyBase.addEventListener('mousedown', e => {
+  joyMouseDown = true;
+  const r = joyBase.getBoundingClientRect();
+  joyUpdate(e.clientX, e.clientY, r.left + r.width/2, r.top + r.height/2);
+});
+document.addEventListener('mousemove', e => {
+  if (!joyMouseDown) return;
+  const r = joyBase.getBoundingClientRect();
+  joyUpdate(e.clientX, e.clientY, r.left + r.width/2, r.top + r.height/2);
+});
+document.addEventListener('mouseup', () => { if(joyMouseDown){ joyMouseDown=false; joyReset(); } });
+
+// ── Bauen per Halten ──────────────────────────
+// Alle PLACE_INTERVAL ms wird ein Block platziert solange
+// der Knopf gedrückt ist. Hört auf wenn der Block direkt
+// beim Spieler angekommen ist (Abstand < 2 Einheiten).
+const PLACE_INTERVAL = 200; // ms zwischen Blöcken
+let placeHeld = false;
+let placeTimer = null;
+
+function tryPlace() {
+  const ray = getCenterRay(); if (!ray) return;
+  const { bestHit, bestV } = getBestHit(ray);
+  if (!bestV || !bestHit) return;
+
+  const nx = bestV.x + Math.round(bestHit.norm[0]);
+  const ny = bestV.y + Math.round(bestHit.norm[1]);
+  const nz = bestV.z + Math.round(bestHit.norm[2]);
+
+  // Weltposition des neuen Blocks
+  const newCX = (nx - (GRIDX-1)/2) * STEP;
+  const newCY = (ny - (GRIDY-1)/2) * STEP;
+  const newCZ = (nz - (GRIDZ-1)/2) * STEP;
+
+  // Abstand zum Spieler berechnen
+  const dist = Math.sqrt(
+    (newCX-camX)**2 + (newCY-camY)**2 + (newCZ-camZ)**2
+  );
+
+  // Stopp wenn Block zu nah am Spieler ist
+  if (dist < 0.4) { stopPlace(); return; }
+
+  const existing = getVoxel(nx, ny, nz);
+  if (existing) {
+    if (!existing.active) { existing.active=true; existing.slot=selectedSlot; buildBuffers(); updateCount(); }
+  } else {
+    voxels.push({x:nx, y:ny, z:nz, active:true, slot:selectedSlot});
+    buildBuffers(); updateCount();
+  }
+}
+
+function startPlace() {
+  if (placeHeld) return;
+  placeHeld = true;
+  tryPlace(); // sofort beim ersten Druck
+  placeTimer = setInterval(tryPlace, PLACE_INTERVAL);
+}
+
+function stopPlace() {
+  placeHeld = false;
+  if (placeTimer) { clearInterval(placeTimer); placeTimer = null; }
+}
+
+// Pie-Slice Buttons über SVG
+// SVG-Elemente unterstützen addEventListener direkt
+const btnPlace = document.getElementById('btn-place');
+const btnSlope = document.getElementById('btn-slope');
+const btnRemove = document.getElementById('btn-remove');
+
+// Maus
+btnPlace.addEventListener('mousedown', ()=>startPlace());
+btnPlace.addEventListener('mouseup',   ()=>stopPlace());
+btnPlace.addEventListener('mouseleave',()=>stopPlace());
+btnSlope.addEventListener('mousedown', ()=>doPlaceSlope());
+btnRemove.addEventListener('mousedown',()=>doRemove());
+
+// Touch direkt auf SVG-Elemente
+btnPlace.addEventListener('touchstart', e=>{ e.stopPropagation(); e.preventDefault(); startPlace(); }, {passive:false});
+btnPlace.addEventListener('touchend',   e=>{ e.stopPropagation(); e.preventDefault(); stopPlace();  }, {passive:false});
+btnSlope.addEventListener('touchstart', e=>{ e.stopPropagation(); e.preventDefault(); doPlaceSlope(); }, {passive:false});
+btnRemove.addEventListener('touchstart',e=>{ e.stopPropagation(); e.preventDefault(); doRemove(); }, {passive:false});
+
+// ── Multi-Touch System ────────────────────────
+// Das Problem: man kann nicht gleichzeitig einen Button halten
+// UND über den Bildschirm wischen wenn jedes Element nur
+// seine eigenen Touches bekommt.
+//
+// Lösung: wir fangen ALLE Touches global auf document ab.
+// Jeder Finger bekommt eine ID. Wir schauen welches Element
+// der Finger zuerst berührt hat, und weisen ihm dann seine
+// Funktion zu: Bewegung ODER Blick.
+//
+// So kann Finger 1 einen Button halten und Finger 2
+// gleichzeitig die Blickrichtung drehen.
+
+const keys={u:false,d:false};
+const SPEED=1.25, SPRINT=2.5;
+
+// Höhen-Buttons Maus
+function holdBtn(id,key){
+  const el=document.getElementById(id);
+  el.addEventListener('mousedown', ()=>keys[key]=true);
+  el.addEventListener('mouseup',   ()=>keys[key]=false);
+  el.addEventListener('mouseleave',()=>keys[key]=false);
+}
+holdBtn('btn-u','u');
+holdBtn('btn-d','d');
+
+const touchRoles = new Map();
+let lookTouchId = null;
+let lookLX = 0, lookLY = 0;
+const lookEl = document.getElementById('look');
+
+// Welches Element liegt unter einem Touch-Punkt?
+function elementAt(x, y) {
+  // Temporär look-div unsichtbar machen damit elementFromPoint
+  // das darunterliegende Element findet
+  lookEl.style.pointerEvents = 'none';
+  const el = document.elementFromPoint(x, y);
+  lookEl.style.pointerEvents = 'auto';
+  return el;
+}
+
+document.addEventListener('touchstart', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    const el = elementAt(t.clientX, t.clientY);
+    const id = el?.id || '';
+
+    if (id === 'btn-u') { touchRoles.set(t.identifier,'btn-u'); keys.u=true;
+    } else if (id === 'btn-d') { touchRoles.set(t.identifier,'btn-d'); keys.d=true;
+    } else if (id === 'btn-place')  { touchRoles.set(t.identifier,'place');  startPlace();
+    } else if (id === 'btn-slope')  { touchRoles.set(t.identifier,'slope');  doPlaceSlope();
+    } else if (id === 'btn-remove') { touchRoles.set(t.identifier,'remove'); doRemove();
+    } else if (id==='slot0'||id==='slot1'||id==='slot2') {
+      touchRoles.set(t.identifier,'slot');
+      selectSlot(parseInt(id.replace('slot','')));
+    } else if (id === 'btn-mode') {
+      touchRoles.set(t.identifier,'mode');
+      toggleMode();
+    } else {
+      // Freie Fläche = Blick-Touch (Joystick hat eigene Handler)
+      touchRoles.set(t.identifier, 'look');
+      if (lookTouchId === null) {
+        lookTouchId = t.identifier;
+        lookLX = t.clientX; lookLY = t.clientY;
+      }
+    }
+  }
+}, { passive: false });
+
+document.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === lookTouchId) {
+      const dx = t.clientX - lookLX;
+      const dy = t.clientY - lookLY;
+      camYaw   += dx * 0.012;
+      camPitch += dy * 0.012;
+      camPitch = Math.max(-Math.PI/2+0.05, Math.min(Math.PI/2-0.05, camPitch));
+      lookLX = t.clientX; lookLY = t.clientY;
+    }
+  }
+}, { passive: false });
+
+document.addEventListener('touchend', e => {
+  for (const t of e.changedTouches) {
+    const role = touchRoles.get(t.identifier);
+    if      (role === 'btn-u') keys.u = false;
+    else if (role === 'btn-d') keys.d = false;
+    else if (role === 'place') stopPlace();
+    else if (role === 'look' && t.identifier === lookTouchId) lookTouchId = null;
+    touchRoles.delete(t.identifier);
+  }
+}, { passive: false });
+
+document.addEventListener('touchcancel', e => {
+  for (const t of e.changedTouches) {
+    const role = touchRoles.get(t.identifier);
+    if      (role === 'btn-u') keys.u=false;
+    else if (role === 'btn-d') keys.d=false;
+    else if (role === 'place') stopPlace();
+    else if (role === 'look' && t.identifier === lookTouchId) lookTouchId = null;
+    touchRoles.delete(t.identifier);
+  }
+}, { passive: false });
+
+// ── Desktop Modus ────────────────────────────
+// Wird aktiviert sobald eine WASD/Leertaste gedrückt wird
+let desktopMode = false;
+
+function enableDesktopMode() {
+  if (desktopMode) return;
+  desktopMode = true;
+  document.body.classList.add('desktop-mode');
+}
+
+// Pointer Lock für Mauslook
+canvas.addEventListener('click', () => {
+  if (desktopMode) canvas.requestPointerLock?.();
+});
+
+document.addEventListener('pointerlockchange', () => {
+  const locked = document.pointerLockElement === canvas;
+  document.getElementById('click-hint').style.display =
+    desktopMode && !locked ? 'block' : 'none';
+});
+
+// Mausbewegung → Blickrichtung (nur mit Pointer Lock)
+document.addEventListener('mousemove', e => {
+  if (document.pointerLockElement !== canvas) return;
+  camYaw   += e.movementX * 0.005;
+  camPitch += e.movementY * 0.005;
+  camPitch = Math.max(-Math.PI/2+0.05, Math.min(Math.PI/2-0.05, camPitch));
+});
+
+// Mausklicks
+document.addEventListener('mousedown', e => {
+  if (document.pointerLockElement !== canvas) return;
+  if (e.button === 2) startPlace();   // Rechtsklick = Bauen
+  if (e.button === 0) doRemove();     // Linksklick  = Abbauen
+  if (e.button === 1) { e.preventDefault(); doPlaceSlope(); } // Mausrad = Slope
+});
+document.addEventListener('mouseup', e => {
+  if (e.button === 2) stopPlace();
+});
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+// Tastatur-Zustand
+const kbKeys = { w:false, a:false, s:false, d:false, space:false, shift:false };
+
+document.addEventListener('keydown', e => {
+  // Desktop-Modus beim ersten Tastendruck aktivieren
+  if (['w','a','s','d',' '].includes(e.key.toLowerCase())) enableDesktopMode();
+
+  switch(e.code) {
+    case 'KeyW':     kbKeys.w=true;     break;
+    case 'KeyA':     kbKeys.a=true;     break;
+    case 'KeyS':     kbKeys.s=true;     break;
+    case 'KeyD':     kbKeys.d=true;     break;
+    case 'Space':    e.preventDefault(); kbKeys.space=true; break;
+    case 'ShiftLeft':
+    case 'ShiftRight': kbKeys.shift=true; break;
+    case 'KeyE':     enableDesktopMode(); toggleMode(); break;
+  }
+});
+
+document.addEventListener('keyup', e => {
+  switch(e.code) {
+    case 'KeyW':     kbKeys.w=false;     break;
+    case 'KeyA':     kbKeys.a=false;     break;
+    case 'KeyS':     kbKeys.s=false;     break;
+    case 'KeyD':     kbKeys.d=false;     break;
+    case 'Space':    kbKeys.space=false; break;
+    case 'ShiftLeft':
+    case 'ShiftRight': kbKeys.shift=false; break;
+  }
+});
+
+// ── Render Loop ───────────────────────────────
+// ── Flug / Lauf Modus ────────────────────────
+let flyMode = false;       // false = Laufmodus, true = Flugmodus
+let velY = 0;              // vertikale Geschwindigkeit (für Gravitation)
+let onGround = false;      // steht der Spieler auf dem Boden?
+
+const GRAVITY    = -9.8;  // m/s² nach unten
+const JUMP_SPEED =  3.5;  // Sprunggeschwindigkeit nach oben
+
+function toggleMode() {
+  flyMode = !flyMode;
+  velY = 0; // Geschwindigkeit zurücksetzen beim Wechsel
+  const btn = document.getElementById('btn-mode');
+  btn.textContent = flyMode ? '✈️' : '🚶';
+  btn.className   = flyMode ? 'fly' : 'walk';
+}
+
+let lt=0,ft=0,fc=0;
+const fpsEl=document.getElementById('fps');
+
+function render(t){
+  const dt=Math.min((t-lt)/1000, 0.05); lt=t;
+  fc++;ft+=dt;
+  if(ft>=0.5){fpsEl.textContent=Math.round(fc/ft);fc=0;ft=0;}
+
+  // ── Kollisionserkennung ───────────────────────
+  const PW = 0.75 * 0.5;
+  const PH_UP   = 0.0;
+  const PH_DOWN = 1.75;
+
+  function collidesAt(px, py, pz) {
+    for (const v of voxels) {
+      if (!v.active) continue;
+      const {cx, cy, cz} = voxelWorld(v);
+      if (
+        px - PW < cx + VS && px + PW > cx - VS &&
+        py - PH_DOWN < cy + VS && py + PH_UP > cy - VS &&
+        pz - PW < cz + VS && pz + PW > cz - VS
+      ) return true;
+    }
+    return false;
+  }
+
+  // ── Bewegung mit Joystick ─────────────────────
+  // Blickrichtung als Vektor (nur horizontal)
+  // forward = wohin der Spieler schaut
+  // right   = senkrecht dazu nach rechts
+  const forwardX =  Math.sin(camYaw);
+  const forwardZ = -Math.cos(camYaw);
+  const rightX   =  Math.cos(camYaw);
+  const rightZ   =  Math.sin(camYaw);
+
+  // Joystick UND Tastatur kombinieren
+  let inputX = joyX, inputZ = joyZ;
+  if (kbKeys.w) inputZ -= 1;
+  if (kbKeys.s) inputZ += 1;
+  if (kbKeys.a) inputX -= 1;
+  if (kbKeys.d) inputX += 1;
+  // Normalisieren wenn diagonal
+  const inputLen = Math.sqrt(inputX*inputX + inputZ*inputZ);
+  if (inputLen > 1) { inputX /= inputLen; inputZ /= inputLen; }
+
+  const moveX = (-inputZ * forwardX + inputX * rightX) * SPEED * dt;
+  const moveZ = (-inputZ * forwardZ + inputX * rightZ) * SPEED * dt;
+
+  if (Math.abs(moveX) > 0.0001 || Math.abs(moveZ) > 0.0001) {
+    if (!collidesAt(camX + moveX, camY, camZ))        camX += moveX;
+    if (!collidesAt(camX,         camY, camZ + moveZ)) camZ += moveZ;
+  }
+
+  // Hoch/Runter: Touch-Buttons ODER Tastatur
+  const goUp   = keys.u || kbKeys.space;
+  const goDown = keys.d || kbKeys.shift;
+
+  if (flyMode) {
+    if(goUp)  { const ny=camY+SPEED*dt; if(!collidesAt(camX,ny,camZ)) camY=ny; }
+    if(goDown){ const ny=camY-SPEED*dt; if(!collidesAt(camX,ny,camZ)) camY=ny; }
+    velY = 0;
+    onGround = false;
+
+  } else {
+    velY += GRAVITY * dt;
+    if (goUp && onGround) {
+      velY = JUMP_SPEED;
+      onGround = false;
+    }
+    const newY = camY + velY * dt;
+    if (!collidesAt(camX, newY, camZ)) {
+      camY = newY;
+      onGround = false;
+    } else {
+      if (velY < 0) onGround = true;
+      velY = 0;
+    }
+  }
+
+  gl.clearColor(0.53,0.81,0.98,1); // Himmelblau
+  gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST);
+
+  const proj=perspective(mat4(),Math.PI/3,canvas.width/canvas.height,0.025,50);
+  const view=buildView();
+  const mvp=mul(mat4(),proj,view);
+  lastMVP=mvp;
+
+  gl.uniformMatrix4fv(uMVP,false,mvp);
+  if(idxCount>0) gl.drawElements(gl.TRIANGLES,idxCount,gl.UNSIGNED_INT,0);
+
+  requestAnimationFrame(render);
+}
+requestAnimationFrame(render);
+</script>
+</body>
+</html>
