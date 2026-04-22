@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Voxel Game – voxeltest25</title>
+  <title>Voxel Game – voxeltest26</title>
   <style>
     * { margin:0; padding:0; box-sizing:border-box; }
     body { background:#0a0a0f; height:100vh; font-family:monospace; overflow:hidden; user-select:none; }
@@ -20,8 +20,8 @@
     #cross::after  { width:100%; height:2px; top:50%; transform:translateY(-50%); }
 
     /* Hotbar unten Mitte */
-    #hotbar { position:fixed; bottom:160px; left:50%; transform:translateX(-50%); display:flex; gap:4px; z-index:10; }
-    .slot { width:19px; height:19px; border-radius:4px; border:1px solid #ffffff33; cursor:pointer; transition:transform 0.1s, border-color 0.1s; }
+    #hotbar { position:fixed; bottom:160px; left:50%; transform:translateX(-50%); display:flex; gap:8px; z-index:20; }
+    .slot { width:22px; height:22px; border-radius:5px; border:2px solid #ffffff33; cursor:pointer; transition:transform 0.1s, border-color 0.1s; touch-action:none; }
     .slot.active { border-color:#ffffff; transform:scale(1.15); }
 
     /* Joystick links unten */
@@ -75,7 +75,7 @@
     .ring-btn:active { background: #ffffff44; }
 
     /* Swipe-Zone für Blickrichtung – die ganze Mitte */
-    #look { position:fixed; top:0; left:0; width:100vw; height:100vh; z-index:5; touch-action:none; }
+    #look { position:fixed; top:0; left:0; width:100vw; height:100vh; z-index:4; touch-action:none; }
 
     /* Flug/Lauf Modus Button oben rechts */
     #btn-mode {
@@ -95,23 +95,12 @@
     body.desktop-mode #btn-mode,
     body.desktop-mode #ui { display: none !important; }
 
-    /* Cursor verstecken im Desktop-Modus */
-    body.desktop-mode { cursor: none; }
-
-    /* Klick-Hinweis wenn kein Pointer Lock */
-    #click-hint {
-      position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
-      color:#ffffffaa; font-size:14px; font-family:monospace;
-      pointer-events:none; z-index:20; text-align:center;
-      background:#00000055; padding:10px 18px; border-radius:8px;
-      display:none;
-    }
-    body.desktop-mode #click-hint { display:block; }
+    /* Cursor verstecken im Desktop-Modus nur wenn Mauslook aktiv */
+    body.mouselook { cursor: none; }
   </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="click-hint">Klicke um die Maus zu sperren</div>
 <div id="cross"></div>
 
 <div id="ui">
@@ -192,10 +181,10 @@
 
 <!-- Hotbar -->
 <div id="hotbar">
-  <div class="slot active" id="slot0" style="background:#3a8a3a;" onclick="selectSlot(0)"></div>
-  <div class="slot"        id="slot1" style="background:#7a4a1a;" onclick="selectSlot(1)"></div>
-  <div class="slot"        id="slot2" style="background:#707070;" onclick="selectSlot(2)"></div>
-  <div class="slot"        id="slot3" style="background:#2080e0;" onclick="selectSlot(3)"></div>
+  <div class="slot active" id="slot0" style="background:#3a8a3a;" onclick="selectSlot(0)" ontouchstart="event.stopPropagation();selectSlot(0);"></div>
+  <div class="slot"        id="slot1" style="background:#7a4a1a;" onclick="selectSlot(1)" ontouchstart="event.stopPropagation();selectSlot(1);"></div>
+  <div class="slot"        id="slot2" style="background:#707070;" onclick="selectSlot(2)" ontouchstart="event.stopPropagation();selectSlot(2);"></div>
+  <div class="slot"        id="slot3" style="background:#2080e0;" onclick="selectSlot(3)" ontouchstart="event.stopPropagation();selectSlot(3);"></div>
 </div>
 
 <script>
@@ -786,7 +775,7 @@ document.addEventListener('touchstart', e => {
     } else if (id === 'btn-place')  { touchRoles.set(t.identifier,'place');  startPlace();
     } else if (id === 'btn-slope')  { touchRoles.set(t.identifier,'slope');  doPlaceSlope();
     } else if (id === 'btn-remove') { touchRoles.set(t.identifier,'remove'); doRemove();
-    } else if (id==='slot0'||id==='slot1'||id==='slot2') {
+    } else if (id==='slot0'||id==='slot1'||id==='slot2'||id==='slot3') {
       touchRoles.set(t.identifier,'slot');
       selectSlot(parseInt(id.replace('slot','')));
     } else if (id === 'btn-mode') {
@@ -840,7 +829,8 @@ document.addEventListener('touchcancel', e => {
 }, { passive: false });
 
 // ── Desktop Modus ────────────────────────────
-// Wird aktiviert sobald WASD/Leertaste gedrückt ODER auf den Canvas geklickt wird
+// Wird aktiviert sobald WASD/Leertaste gedrückt wird.
+// Kein Pointer Lock – Mauslook läuft bei gedrückter rechter Maustaste.
 let desktopMode = false;
 
 function enableDesktopMode() {
@@ -849,44 +839,55 @@ function enableDesktopMode() {
   document.body.classList.add('desktop-mode');
 }
 
-// Pointer Lock anfordern (Desktop-Modus aktivieren falls nötig)
-function requestLock() {
-  enableDesktopMode();
-  canvas.requestPointerLock?.();
-}
+// ── Maus-Steuerung (Desktop) ──────────────────
+// Rechte Maustaste halten = Kamera drehen
+// Linksklick              = Abbauen
+// Mittelklick             = Slope platzieren
+// Scroll-Rad              = Slot wechseln
+let mouseRightDown = false;
+let lastMouseX = 0, lastMouseY = 0;
 
-// Klick auf Canvas → Desktop-Modus + Pointer Lock + Spielaktion
-canvas.addEventListener('mousedown', e => {
-  if (document.pointerLockElement !== canvas) {
-    // Noch kein Lock: Lock anfordern, Aktion NICHT ausführen
-    requestLock();
-    e.preventDefault();
-    return;
+document.addEventListener('mousedown', e => {
+  if (desktopMode) {
+    if (e.button === 2) {
+      mouseRightDown = true;
+      lastMouseX = e.clientX;
+      lastMouseY = e.clientY;
+      document.body.classList.add('mouselook');
+      startPlace();
+      e.preventDefault();
+    }
+    if (e.button === 0) { doRemove(); }
+    if (e.button === 1) { e.preventDefault(); doPlaceSlope(); }
   }
-  // Lock aktiv → Spielaktionen auslösen
-  if (e.button === 2) startPlace();          // Rechtsklick = Bauen
-  if (e.button === 0) doRemove();            // Linksklick  = Abbauen
-  if (e.button === 1) { e.preventDefault(); doPlaceSlope(); } // Mausrad = Slope
 });
 
-canvas.addEventListener('mouseup', e => {
-  if (document.pointerLockElement !== canvas) return;
-  if (e.button === 2) stopPlace();
+document.addEventListener('mouseup', e => {
+  if (e.button === 2) {
+    mouseRightDown = false;
+    document.body.classList.remove('mouselook');
+    stopPlace();
+  }
 });
 
-document.addEventListener('pointerlockchange', () => {
-  const locked = document.pointerLockElement === canvas;
-  document.getElementById('click-hint').style.display =
-    desktopMode && !locked ? 'block' : 'none';
-});
-
-// Mausbewegung → Blickrichtung (nur mit Pointer Lock)
 document.addEventListener('mousemove', e => {
-  if (document.pointerLockElement !== canvas) return;
-  camYaw   += e.movementX * 0.005;
-  camPitch += e.movementY * 0.005;
+  if (!desktopMode || !mouseRightDown) return;
+  const dx = e.clientX - lastMouseX;
+  const dy = e.clientY - lastMouseY;
+  lastMouseX = e.clientX;
+  lastMouseY = e.clientY;
+  camYaw   += dx * 0.005;
+  camPitch += dy * 0.005;
   camPitch = Math.max(-Math.PI/2+0.05, Math.min(Math.PI/2-0.05, camPitch));
 });
+
+// Scroll-Rad → Slot wechseln
+document.addEventListener('wheel', e => {
+  if (!desktopMode) return;
+  const total = document.querySelectorAll('.slot').length;
+  selectedSlot = (selectedSlot + (e.deltaY > 0 ? 1 : -1) + total) % total;
+  selectSlot(selectedSlot);
+}, { passive: true });
 
 document.addEventListener('contextmenu', e => e.preventDefault());
 
