@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Voxel Game</title>
+  <title>Voxel Game – voxeltest25</title>
   <style>
     * { margin:0; padding:0; box-sizing:border-box; }
     body { background:#0a0a0f; height:100vh; font-family:monospace; overflow:hidden; user-select:none; }
@@ -195,6 +195,7 @@
   <div class="slot active" id="slot0" style="background:#3a8a3a;" onclick="selectSlot(0)"></div>
   <div class="slot"        id="slot1" style="background:#7a4a1a;" onclick="selectSlot(1)"></div>
   <div class="slot"        id="slot2" style="background:#707070;" onclick="selectSlot(2)"></div>
+  <div class="slot"        id="slot3" style="background:#2080e0;" onclick="selectSlot(3)"></div>
 </div>
 
 <script>
@@ -220,6 +221,7 @@ const COLORS_BY_SLOT=[
   [[.2,.9,.5],[.1,.5,.3],[.4,1,.7],[.05,.3,.15],[.15,.7,.4],[.1,.6,.35]],   // grün
   [[.6,.35,.1],[.35,.2,.05],[.75,.45,.15],[.2,.12,.03],[.5,.28,.08],[.42,.24,.07]], // braun
   [[.7,.7,.7],[.4,.4,.4],[.9,.9,.9],[.2,.2,.2],[.6,.6,.6],[.5,.5,.5]],      // grau
+  [[.15,.55,1],[.1,.35,.8],[.25,.65,1],[.05,.2,.6],[.2,.5,.95],[.1,.4,.85]], // blau
 ];
 let selectedSlot=0;
 function selectSlot(i){selectedSlot=i;document.querySelectorAll('.slot').forEach((s,j)=>s.classList.toggle('active',j===i));}
@@ -838,7 +840,7 @@ document.addEventListener('touchcancel', e => {
 }, { passive: false });
 
 // ── Desktop Modus ────────────────────────────
-// Wird aktiviert sobald eine WASD/Leertaste gedrückt wird
+// Wird aktiviert sobald WASD/Leertaste gedrückt ODER auf den Canvas geklickt wird
 let desktopMode = false;
 
 function enableDesktopMode() {
@@ -847,9 +849,29 @@ function enableDesktopMode() {
   document.body.classList.add('desktop-mode');
 }
 
-// Pointer Lock für Mauslook
-canvas.addEventListener('click', () => {
-  if (desktopMode) canvas.requestPointerLock?.();
+// Pointer Lock anfordern (Desktop-Modus aktivieren falls nötig)
+function requestLock() {
+  enableDesktopMode();
+  canvas.requestPointerLock?.();
+}
+
+// Klick auf Canvas → Desktop-Modus + Pointer Lock + Spielaktion
+canvas.addEventListener('mousedown', e => {
+  if (document.pointerLockElement !== canvas) {
+    // Noch kein Lock: Lock anfordern, Aktion NICHT ausführen
+    requestLock();
+    e.preventDefault();
+    return;
+  }
+  // Lock aktiv → Spielaktionen auslösen
+  if (e.button === 2) startPlace();          // Rechtsklick = Bauen
+  if (e.button === 0) doRemove();            // Linksklick  = Abbauen
+  if (e.button === 1) { e.preventDefault(); doPlaceSlope(); } // Mausrad = Slope
+});
+
+canvas.addEventListener('mouseup', e => {
+  if (document.pointerLockElement !== canvas) return;
+  if (e.button === 2) stopPlace();
 });
 
 document.addEventListener('pointerlockchange', () => {
@@ -866,16 +888,6 @@ document.addEventListener('mousemove', e => {
   camPitch = Math.max(-Math.PI/2+0.05, Math.min(Math.PI/2-0.05, camPitch));
 });
 
-// Mausklicks
-document.addEventListener('mousedown', e => {
-  if (document.pointerLockElement !== canvas) return;
-  if (e.button === 2) startPlace();   // Rechtsklick = Bauen
-  if (e.button === 0) doRemove();     // Linksklick  = Abbauen
-  if (e.button === 1) { e.preventDefault(); doPlaceSlope(); } // Mausrad = Slope
-});
-document.addEventListener('mouseup', e => {
-  if (e.button === 2) stopPlace();
-});
 document.addEventListener('contextmenu', e => e.preventDefault());
 
 // Tastatur-Zustand
